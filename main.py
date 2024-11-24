@@ -1,8 +1,8 @@
+import subprocess
 from typing import Literal
 from openai import AzureOpenAI
 import sieve
 from azure_llm_calls import AzureCall
-import ffmpeg
 import os
 
 def get_azure_openai_api_key():
@@ -33,9 +33,8 @@ VoiceOptions =  Literal['cartesia-japanese-man-book', 'cartesia-german-conversat
 ModelOptions = Literal['gpt-4o', 'gpt-4o-mini', 'gpt-4']
 
 metadata = sieve.Metadata(
-    title="Youtube video to conversational podcast",
-    description="Given a youtube video url generate a conversational podcast.",
-    code_url="https://github.com/808Code/video_to_commentary_podcast/blob/main/main.py",
+    title="Youtube video to conversational visual podcast",
+    description="Given a youtube video url generate a conversational podcast visual podcast with talking heads.",
     tags=["Video", "Audio"],
     image=sieve.Image(
         path="logo.jpg"
@@ -43,8 +42,8 @@ metadata = sieve.Metadata(
     readme=open("README.md", "r").read(),
 )
 @sieve.function(
-    name="video_to_commentary_podcast",
-    python_packages=["openai", "ffmpeg-python"],
+    name="video_to_visual_podcast",
+    python_packages=["openai"],
     system_packages=["ffmpeg"],
     python_version="3.10.12",
     environment_variables=[
@@ -55,28 +54,33 @@ metadata = sieve.Metadata(
     ],
     metadata=metadata
 )
-def video_to_commentary_podcast(
+def video_to_visual_podcast(
           url :str, 
-          name1 : str = 'sam',          
-          voice1: VoiceOptions = 'cartesia-friendly-reading-man', 
+          name1 : str = 'sam',                  
+          voice1: VoiceOptions = 'cartesia-friendly-reading-man',
+          potrait_image1: sieve.File = sieve.File(path = 'man.jpeg'),  
           name2: str = 'jane', 
           voice2: VoiceOptions = 'cartesia-australian-woman',
+          potrait_image2: sieve.File = sieve.File(path = 'woman.jpeg'),
           max_summary_length: int = 10,
           azure_model_name: ModelOptions = 'gpt-4o'
     ) -> sieve.File:
 
     """
-    Converts a YouTube video into a commentary podcast by generating dialogues from its summary 
-    and synthesizing audio for each dialogue.
+    Converts a YouTube video into a commentary podcast with talking avatars by generating dialogues from its summary 
+    and synthesizing audio with avatar video for each dialogue.
 
     :param url: YouTube video URL.
     :param name1: Name of speaker one in the conversation.
     :param voice1: Voice of speaker one in the conversation.
+    :param potrait_image1: Image of speaker one in the conversation.
     :param name2: Name of speaker two in the conversation.
     :param voice2: Voice of speaker two in the conversation.
+    :param potrait_image2: Image of speaker two in the conversation.
     :param max_summary_length: Maximum length of the video summary.
-    :return: Generated audio file of the commentary podcast.
+    :return: Generated video file of the commentary podcast.
     """
+   
     client = AzureOpenAI(
     api_key = get_azure_openai_api_key(),
     api_version = get_azure_api_version(),
@@ -119,7 +123,6 @@ def video_to_commentary_podcast(
     conversation_structured = azure_call.get_conversation_structured(conversation_unstructured)
     print(f"A conversation generated has been parsed to json that is of length {len(conversation_structured['dialogues'])}.")
     
-    
     tts_settings = {
         'reference_audio': sieve.File(url="https://storage.googleapis.com/sieve-prod-us-central1-public-file-upload-bucket/482b91af-e737-48ea-b76d-4bb22d77fb56/caa0664b-f530-4406-858a-99837eb4b354-input-reference_audio.wav"),
         'emotion': "normal",
@@ -129,27 +132,75 @@ def video_to_commentary_podcast(
         'word_timestamps': False,
     }
 
+    portrait_avatar_settings = {
+        "backend": "hedra-character-2",
+        "aspect_ratio": "-1",
+        "enhancement": "none",
+        "resolution": "640",
+        "crop_head": False,
+        "expressiveness": 1
+    }
+
 
     tts = sieve.function.get("sieve/tts")
-   
-    for dialogue_object in conversation_structured['dialogues']:        
-            voice = voice2
-            if(name1.lower() == dialogue_object['name'].lower()):
-                voice = voice1
-            dialogue_object['job'] = tts.push(voice, dialogue_object['dialogue'], **tts_settings)
+    portrait_avatar = sieve.function.get("sieve/portrait-avatar")
 
-    inputs = [ffmpeg.input(file_name) for file_name in [dialogue_object['job'].result().path for dialogue_object in conversation_structured['dialogues']]]
     
+    #TODO: Package the audio and video into a pair and run asynchronously.
+    for dialogue_object in conversation_structured['dialogues']:
+            picked_voice = voice2
+            if(name1.lower() == dialogue_object['name'].lower()):
+                picked_voice = voice1
+            dialogue_object['tts_job'] = tts.push(picked_voice, dialogue_object['dialogue'], **tts_settings)
+            
+    for dialogue_object in conversation_structured['dialogues']:    
+            picked_image = potrait_image2   
+            if(name1.lower() == dialogue_object['name'].lower()):
+                picked_image = potrait_image1
+            dialogue_object['avatar_job'] = portrait_avatar.push(picked_image, sieve.File(path = dialogue_object['tts_job'].result().path), **portrait_avatar_settings)
+
     try:
-        ffmpeg.concat(*inputs, v=0, a=1).output('output.wav', acodec='pcm_s16le', format='wav', **{'y': None}).run(quiet=False, capture_stdout=True, capture_stderr=True)
-    except ffmpeg.Error as e:
-        if e.stderr:
-            print("FFmpeg Error:", e.stderr.decode('utf-8'))
-        else:
-            print("FFmpeg Error: No stderr output available")
+        try:
+            input_files = [
+                dialogue_object['avatar_job'].result().path 
+                for dialogue_object in conversation_structured['dialogues']
+            ]
+        except Exception as e:
+            print("Talking avatar video not generated.")
+            raise
+
+        file_list_path = 'temp_video_list.txt'
+        with open(file_list_path, 'w') as file_list:
+            for video in input_files:
+                file_list.write(f"file '{video}'\n")
+
+        final_output = 'output.mp4'
+        command = [
+            'ffmpeg',
+            '-y',
+            '-f', 'concat',
+            '-safe', '0',
+            '-i', file_list_path,
+            '-c', 'copy',
+            final_output
+        ]
+        subprocess.run(command, check=True)
+        print("Videos concatenated successfully.")
+        
+        try:
+            if os.path.exists(file_list_path):
+                os.remove(file_list_path)
+                print(f"Temporary file {file_list_path} deleted.")
+        except Exception as e:
+            print("Error during temp file deletion")
+            raise
+
+    except subprocess.CalledProcessError as e:
+        print(f"Error concatenating videos: {e}")
         raise
-    return sieve.Audio(path="output.wav")
+    
+    return sieve.Video(path="output.mp4")
 
 if __name__=="__main__":
-    sieve_audio_object = video_to_commentary_podcast("https://www.youtube.com/watch?v=EW9TUqOgjmQ", "Alpha", "cartesia-german-conversational-woman", "Omega", "cartesia-commercial-man", 10, 'gpt-4o')
-    print(sieve_audio_object)
+    sieve_video_object = video_to_visual_podcast("https://www.youtube.com/watch?v=EW9TUqOgjmQ", "Alpha", "cartesia-german-conversational-woman",sieve.File(path = 'woman.jpeg'), "Omega", "cartesia-commercial-man", sieve.File(path = 'man.jpeg'), 10, 'gpt-4o')
+    print(sieve_video_object)
