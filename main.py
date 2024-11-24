@@ -198,7 +198,7 @@ def video_to_visual_podcast(
     except subprocess.CalledProcessError as e:
         print(f"Error concatenating videos: {e}")
         raise
-    
+    print("Output video created successfully.")
     return sieve.Video(path="output.mp4")
 
 if __name__=="__main__":
