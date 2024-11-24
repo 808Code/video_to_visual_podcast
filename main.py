@@ -34,7 +34,8 @@ ModelOptions = Literal['gpt-4o', 'gpt-4o-mini', 'gpt-4']
 
 metadata = sieve.Metadata(
     title="Youtube video to conversational visual podcast",
-    description="Given a youtube video url generate a conversational podcast visual podcast with talking heads.",
+    description="Given a youtube video url generate a conversational podcast visual podcast with talking avatars.",
+    code_url="https://github.com/808Code/video_to_visual_podcast/blob/main/main.py",
     tags=["Video", "Audio"],
     image=sieve.Image(
         path="logo.jpg"
